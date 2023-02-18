@@ -1,0 +1,75 @@
+# Copyright 2023 Aleksandr Ovsiankin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#	  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+provisionerName: local-sparse.csi.reinstall.ru
+
+# plugin container image options
+image:
+  # image name
+  repository: docker.citik.ru/test/csi-plugin
+  # image tag
+  tag: latest
+  # image pull policy
+  pullPolicy: Always
+
+# Node service options
+node:
+# set if rbac.createServiceAccounts false, so you want to use custom node service account name
+#  serviceAccount: name
+
+  # node service log level
+  logLevel: debug
+  # force logs as json
+  logJson: true
+  # use direct-io on loop devices
+  directIO: true
+
+  # kubernetes node accessible topology key
+  nodeNameTopologyKey: hostname
+
+  # node service tolerations
+  tolerations:
+    - operator: "Exists"
+
+# Controller service options
+controller:
+# set if rbac.createServiceAccounts false, so you want to use custom controller service account name
+#  serviceAccount: name
+
+  # controller replica count
+  replicas: 1
+
+  # controller node selector
+  nodeSelector: {}
+
+  # controller toleration options
+  tolerations: []
+
+# RBAC options
+rbac:
+  createRoles: true
+  createServiceAccounts: true
+
+# storageClass options
+storageClass:
+  create: true
+  name: local-sparse
+
+# metrics options
+metrics:
+  podMonitor:
+    enabled: false
+    port: metrics
+    path: /metrics
+    interval: 60s
