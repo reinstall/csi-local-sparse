@@ -1,0 +1,192 @@
+# Copyright 2023 Aleksandr Ovsiankin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#	  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: '{{ template "service.name" . }}-node'
+  namespace: '{{ .Release.Namespace }}'
+  labels:
+{{ include "service.labels" . | indent 4 }}
+spec:
+  selector:
+    matchLabels:
+{{ include "service.labels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "service.labels" . | indent 8 }}
+    spec:
+      priorityClassName: system-node-critical
+
+      {{- if .Values.node.serviceAccount }}
+      serviceAccount: {{ .Values.node.serviceAccount }}
+      {{- else }}
+      serviceAccount: '{{ template "service.name" . }}-node'
+      {{- end }}
+
+      {{- if len .Values.node.tolerations }}
+      tolerations:
+{{ toYaml .Values.node.tolerations | indent 8 }}
+      {{- end }}
+
+      volumes:
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+        - name: socket-dir
+          hostPath:
+            path: '/var/lib/kubelet/plugins/{{ .Values.provisionerName }}'
+            type: DirectoryOrCreate
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: DirectoryOrCreate
+        - name: data-dir
+          hostPath:
+            path: /data
+            type: DirectoryOrCreate
+
+      containers:
+        - name: csi-plugin
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          env:
+            - name: LOG_LEVEL
+              value: "{{ .Values.node.logLevel }}"
+            - name: LOG_JSON
+              value: "{{ .Values.node.logJson }}"
+            - name: GRPC_LISTEN_SOCKET
+              value: "unix:///csi/csi.sock"
+            - name: IMAGES_DIR
+              value: "/data"
+            - name: NODE_NAME_TOPOLOGY_KEY
+              value: "{{ .Values.node.nodeNameTopologyKey }}"
+            - name: DIRECT_IO
+              value: "{{ .Values.node.directIO }}"
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: mountpoint-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: data-dir
+              mountPath: /data
+          ports:
+            - containerPort: 9808
+              name: healthz
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 2
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 1000m
+
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.9.0
+          imagePullPolicy: Always
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+          args:
+            - --v=4
+            - --csi-address=/csi/csi.sock
+
+        - name: node-driver-registrar
+          image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.6.3
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
+            - "--health-port=9809"
+          env:
+            - name: ADDRESS
+              value: '/csi/csi.sock'
+            - name: DRIVER_REG_SOCK_PATH
+              value: '/var/lib/kubelet/plugins/{{ .Values.provisionerName }}/csi.sock'
+          lifecycle:
+            preStop:
+              exec:
+                command: [ "/bin/sh", "-c", "rm -rf /registration/{{ .Values.provisionerName }} /registration/{{ .Values.provisionerName }}-reg.sock" ]
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          ports:
+            - containerPort: 9809
+              name: healthz
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: 500m
+              memory: 100Mi
+            requests:
+              cpu: 10m
+              memory: 100Mi
+
+        - name: external-provisioner
+          image: k8s.gcr.io/sig-storage/csi-provisioner:v3.4.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--feature-gates=Topology=true"
+            - "--strict-topology"
+            - "--immediate-topology=false"
+            - "--timeout=120s"
+            - "--enable-capacity=true"
+            - "--capacity-ownerref-level=1"
+            - "--node-deployment=true"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi

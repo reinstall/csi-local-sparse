@@ -1,0 +1,128 @@
+# Copyright 2023 Aleksandr Ovsiankin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#	  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: '{{ template "service.name" . }}-controller'
+  namespace: '{{ .Release.Namespace }}'
+  labels:
+{{ include "service.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+{{ include "service.labels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "service.labels" . | indent 8 }}
+    spec:
+      {{- if .Values.controller.serviceAccount }}
+      serviceAccount: {{ .Values.controller.serviceAccount }}
+      {{- else }}
+      serviceAccount: '{{ template "service.name" . }}-controller'
+      {{- end }}
+
+      {{- if .Values.controller.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.controller.nodeSelector | indent 8 }}
+      {{- end }}
+
+      {{- if len .Values.controller.tolerations }}
+      tolerations:
+{{ toYaml .Values.controller.tolerations | indent 8 }}
+      {{- end }}
+
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: '/var/lib/kubelet/plugins/{{ .Values.provisionerName }}/controller'
+            type: DirectoryOrCreate
+
+      containers:
+        - name: csi-plugin
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          env:
+            - name: LOG_LEVEL
+              value: "{{ .Values.node.logLevel }}"
+            - name: LOG_JSON
+              value: "{{ .Values.node.logJson }}"
+            - name: GRPC_LISTEN_SOCKET
+              value: "unix:///csi/csi.sock"
+            - name: IMAGES_DIR
+              value: "/data"
+            - name: NODE_NAME_TOPOLOGY_KEY
+              value: "{{ .Values.node.nodeNameTopologyKey }}"
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          ports:
+            - containerPort: 9808
+              name: healthz
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 2
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 1000m
+
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.9.0
+          imagePullPolicy: Always
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+          args:
+            - --v=4
+            - --csi-address=/csi/csi.sock
+
+        - name: external-resizer
+          image: k8s.gcr.io/sig-storage/csi-resizer:v1.7.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--handle-volume-inuse-error=false"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 100m
+            limits:
+              memory: 128Mi
+              cpu: 500m
