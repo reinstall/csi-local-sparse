@@ -17,7 +17,7 @@ provisionerName: local-sparse.csi.reinstall.ru
 # plugin container image options
 image:
   # image name
-  repository: docker.citik.ru/test/csi-plugin
+  repository: ghcr.io/reinstall/csi-local-sparse
   # image tag
   tag: latest
   # image pull policy
