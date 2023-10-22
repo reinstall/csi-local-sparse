@@ -59,6 +59,10 @@ spec:
           hostPath:
             path: /data
             type: DirectoryOrCreate
+        - name: dev
+          hostPath:
+            path: /dev
+            type: Directory
 
       containers:
         - name: csi-plugin
@@ -92,6 +96,8 @@ spec:
               mountPropagation: "Bidirectional"
             - name: data-dir
               mountPath: /data
+            - name: dev
+              mountPath: /dev
           ports:
             - containerPort: 9808
               name: healthz
